@@ -7,65 +7,72 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Android SDK
-        run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found"
-            exit 1
-          fi
-          echo "SDKMANAGER=$SDKMANAGER" >> $GITHUB_ENV
-
-      - name: Install Android SDK packages
-        run: |
-          yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Setup Gradle
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract Android project
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Find and extract Android project
+        shell: bash
         run: |
           mkdir -p extracted
-          unzip -q FootballStudioTracker.zip.zip -d extracted
 
-      - name: Find Android project
-        run: |
-          PROJECT_DIR=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit | xargs -r dirname)
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "Android project not found"
-            exit 1
+          if [ -f "settings.gradle.kts" ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          else
+            ARCHIVE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+            if [ -z "$ARCHIVE" ]; then
+              echo "ERROR: No ZIP file found"
+              exit 1
+            fi
+
+            echo "Found archive: $ARCHIVE"
+            unzip -q "$ARCHIVE" -d extracted
+
+            PROJECT_FILE=$(find extracted -name settings.gradle.kts -print -quit)
+
+            if [ -z "$PROJECT_FILE" ]; then
+              echo "ERROR: settings.gradle.kts not found"
+              exit 1
+            fi
+
+            PROJECT_DIR=$(dirname "$PROJECT_FILE")
+            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Build APK
         run: |
           cd "$PROJECT_DIR"
-          gradle --no-daemon assembleDebug
+          gradle --no-daemon clean assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FootballStudioTracker-APK
-          path: extracted/**/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
